@@ -1,0 +1,286 @@
+---
+title: "Assignment2_Part1_VoiceInSchizophrenia"
+author: "Réka Keresztényi"
+date: "July 17, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(pastecs)
+library(purrr)
+library(rgl)
+library(tseriesChaos)
+library(SparseM)
+library(crqa)
+library(stringr)
+library(MuMIn)
+
+setwd("C:/Users/Reka/Documents/EM3")
+```
+
+## Assignment 2 - Part 1 - Assessing voice in schizophrenia
+
+Schizophrenia has been associated with "inappropriate" voice, sometimes monotone, sometimes croaky. A few studies indicate that pitch might be an index of schizophrenia. However, an ongoing meta-analysis of the literature (which you will have a go at in the last assignment) indicates that pitch mean and standard deviation are only weak indicators of Diagnosis. Can we do better with our new fancy complex skills?
+
+The corecplotus you are asked to analyse is a set of voice recordings from people with schizophrenia (just after first Diagnosis) and 1-1 matched controls (on gender, age, education). Each participant watched 10 videos of triangles moving across the screen and had to describe them (so you have circa 10 recordings per person). We have already extracted the pitch once every 10 milliseconds and you will have to use this data to assess differences in the voice.
+
+Can you characterize voice in schizophrenia as acoustically different? Report the methods you used to answer this question and the results from the analyses. Add a couple of lines trying to interecplotret the results (make sense of the difference). E.g. People with schizophrenia tend to have high-pitched voice, and present bigger swings in their prosody than controls. Add a couple of lines describing limitations of the data/analyses if any is relevant.
+
+
+N.B. There are looots of files to be dealt with. Maybe too many for your computer, depending on how you load the files. This is a challenge for you. Some (complementary) possible strategies:
+- You can select a subset of files only (and you have to justify your choice).
+- You can learn how to use the apply() or map() functions.
+- You can coordinate with classmates.
+
+Hint: There is some information in the filenames that you might need.
+Hint: It might be a good idea to first create a function which loads and parses one file, and then loop through the list of files to read them all. For example
+
+1. In the course of this assignment you have to first select one datafile and figure out how to:
+
+- Extract "standard" descriptors of pitch: Mean, standard deviation, range
+- Extract less "standard" descriptors of pitch you can think of (e.g. median, iqr, mean absoluted deviation, coefficient of variation)
+
+```{r, extract info}
+#datasets
+demo <- read.delim("Demodata.txt")
+test <- read.delim("Pitch/Study1D0S101T2_f0.txt") 
+art <- read.csv("Articulation.txt")
+
+#Standard descriptors
+stat.desc(test_data$time)
+stat.desc(test_data$f0)
+mean(test_data$f0) #130.60
+sd(test_data$f0) #13.76
+#sd(test_data$f0)/mean(test_data$f0)*100 #10.54
+range(test_data$f0) #114.71 - 229.55
+median(test_data$f0) #128.04
+#Get aboslute deviation
+mad(test_data$time) #2.11
+mad(test_data$f0)   #8.88
+mad(test_data$f0, center = mean(test_data$f0), na.rm = FALSE) #10.93
+#IQR = interquartile range
+IQR(test_data$f0) #12.89
+
+#TIME: Mean = 3.86; Standard deviation = 2.91; Range = 0.2 - 8.74; Median = 2.77; Absolute deviation = 2.11; Coefficient of variation = 0.75
+
+#PITCH FREQUENCY: Mean = 130.6; Standard deviation = 13.76; Range = 114.71 - 229.55; Median = 128.04; Absolute deviation = 8.88; Coefficient of variation = 0.11
+
+#Find parameters: delay, dimensions, radius
+optimizeParam(test_data$f0,test_data$f0, par = list(lgM = 50, steps = seq(1,6,1),radiusspan = 100, radiussample = 40, normalize = 0, rescale = 0, mindiagline = 2, minvertline = 2, tw = 0, whiteline = FALSE, recpt = FALSE, fnnpercent = 10, typeami = "mindip"), min.rec = 3.5, max.rec = 4.5)
+#radius: 5.72
+#emddim: 3
+#delay: 35
+
+#Use the parameters to do the recurrence analysis
+x <- crqa(test_data$f0,test_data$f0,embed = 3, delay = 35, radius = 5.717789, rescale = 0, normalize = 0, mindiagline = 2, minvertline = 2)
+
+#recurrence plot 
+RP <- x$RP
+RP <- matrix(as.numeric(RP), nrow=ncol(RP))
+cols <- c("white", "blue")
+image(RP, xlab = "", ylab="", col=cols)
+
+```
+
+
+2. Second you will have to turn the code into a function and loop through all the files (or even better use apply/sapply/lapply)
+- Remember to extract the relevant information from the file names (Participant, Diagnosis, Trial, Study)
+
+```{r, loop/extractinfo}
+#Create empty list
+Subject <- NULL
+Study <-  NULL
+Trial <-  NULL
+Diagnosis <-  NULL
+PR <- NULL
+DET <- NULL
+NRLINE <- NULL
+maxL <- NULL
+L <- NULL
+ENTR <- NULL
+LAM <- NULL
+TT <- NULL
+mean <- NULL
+SD <- NULL
+range <- NULL
+median <- NULL
+IQR <- NULL
+mad <- NULL
+coef_var <- NULL
+
+#loadallfiles
+files <- list.files("Pitch/", pattern = ".*.txt", full.names = TRUE)
+
+# for every loop n will be increased by 1 so that we can distinguish between each file
+n = 1
+
+#loop
+for (file in files) {
+  df = read.delim(file)
+  Subject[n] <-  substr(file, 14, 18)
+  Study[n] <-  substr(file, 7, 12)
+  Trial[n] <- sub("_", "", substr(file, 20, 21))
+  Diagnosis[n] <-  substr(file, 14, 14)
+  mean[n] <- mean(df$f0)
+  SD[n] <- sd(df$f0)
+  range[n] <- range(df$f0)
+  median[n] <- median(df$f0)
+  IQR[n] <- IQR(df$f0)
+  mad[n] <- mad(df$f0,center = mean(df$f0))
+  coef_var[n] <- sd(df$f0)/mean(df$f0)*100
+  
+  #set parameterlist and optimize them
+  par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+  
+  parameters <- try(optimizeParam(df$f0, df$f0, par, min.rec = 3.5, max.rec = 4.5))
+  
+  
+  #this if/else statement assures that we the files that does not fit the parameters are still considered in the final lists 
+  if (length(parameters) > 1) {
+  
+  results1 <- crqa(df$f0, df$f0, delay = parameters$delay, embed = parameters$emddim, radius = parameters$radius, normalize = 0, rescale = 0, mindiagline = 2, minvertline = 2)
+  
+  PR[n] = results1$RR
+  DET[n] <- results1$DET
+  NRLINE[n] <- results1$NRLINE
+  maxL[n] <- results1$maxL
+  L[n] <- results1$L
+  ENTR[n] <- results1$ENTR
+  LAM[n] <- results1$LAM
+  TT[n] <- results1$TT
+  
+  
+  }
+  
+  else {
+  
+  PR[n] = NA
+  DET[n] <- NA
+  NRLINE[n] <- NA
+  maxL[n] <- NA
+  L[n] <- NA
+  ENTR[n] <- NA
+  LAM[n] <- NA
+  TT[n] <- NA
+  
+  }
+  
+#increase n by 1 to index into the next value in the lists
+  n = n + 1
+  
+}
+
+all_data <-  data.frame(Subject, Study, Trial, Diagnosis, PR, DET, NRLINE, maxL, L, ENTR, LAM, TT, mean, SD, range, median)
+
+#write csv file with the dataframe 
+write.csv(all_data, file = "schiz_data.csv")
+
+```
+
+3. Make one model per acoustic feature and test whether you can observe significant difference due to Diagnosis. Tip: Which other fixed factors should you control for (that is, include in the model)? Which random ones?
+- Bonus points: cross-validate the model and report the betas and standard errors from all rounds to get an idea of how robust the estimates are. 
+3a. Is Study a significant predictor in these models? What should you infer from this? Does Study interact with Diagnosis? What should you infer from this?
+```{r, function}
+#merged with demo
+data <- read.csv("schizdata.csv")
+
+#Function extracting coefficients and other things from model summary
+model_info = function(mdl,n){
+  temp_df = summary(mdl)$coefficients
+  temp_df = as.data.frame(temp_df)
+  temp_df = tibble::rownames_to_column(temp_df, "coef")
+  temp_df$R2m = r.squaredGLMM(mdl)[1]
+  temp_df$R2c = r.squaredGLMM(mdl)[2]
+  temp_df$n = n
+  return(temp_df)
+}
+
+#mean
+model_mean <-model_info(lmerTest::lmer(mean ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),1)
+#range
+model_range <- model_info(lmerTest::lmer(range ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),2)
+#sd
+model_sd <-model_info(lmerTest::lmer(SD ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),3)
+#median
+model_median <-model_info(lmerTest::lmer(median ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),4)
+#iqr
+model_iqr <-model_info(lmerTest::lmer(IQR ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),5)
+#mad
+model_mad <-model_info(lmerTest::lmer(mad ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),6)
+#coefvar
+model_coefvar <-model_info(lmerTest::lmer(coef_var ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),7)
+#min
+model_min <-model_info(lmerTest::lmer(min ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),8)
+#max
+model_max <-model_info(lmerTest::lmer(max ~ Diagnosis + Gender  + (1+Trial|Subject) + (1+Trial|Study), data , REML = FALSE),9)
+
+#ALL info together
+all_data <- as.data.frame(rbind(model_mean,model_range,model_median,model_max,model_min,model_mad,model_iqr,model_sd,model_coefvar)) #significant all
+```
+
+```{r, +study}
+#mean+study
+mean_model2 <- model_info(lmerTest::lmer(mean ~ Diagnosis + Study + Gender + (1+Trial|Subject), data, REML = FALSE),1)
+#sd
+sd_model2 <- model_info(lmerTest::lmer(SD ~ Diagnosis + Study + Gender + (1+Trial|Subject),data, REML = FALSE),2)
+#min
+min_model2 <- model_info(lmerTest::lmer(min ~ Diagnosis + Study + Gender + (1+Trial|Subject),data, REML = FALSE),3)
+#max
+max_model2 <- model_info(lmerTest::lmer(max ~ Diagnosis + Study + Gender + (1+Trial|Subject),data, REML = FALSE),4)
+#median
+median_model2 <- model_info(lmerTest::lmer(median ~ Diagnosis + Study + Gender +(1+Trial|Subject),data, REML = FALSE),5)
+#iqr
+iqr_model2 <- model_info(lmerTest::lmer(IQR ~ Diagnosis + Study + Gender + (1+Trial|Subject),data, REML = FALSE),6)
+#mad
+mad_model2 <- model_info(lmerTest::lmer(mad ~ Diagnosis + Study + Gender + (1+Trial|Subject),data, REML = FALSE),7)
+#coefvar
+coef_model2 <- model_info(lmerTest::lmer(coef_var ~ Diagnosis + Study + Gender + (1+Trial|Subject) ,data, REML = FALSE),8)
+#range
+range_model2 <- model_info(lmerTest::lmer(range ~ Diagnosis + Study + Gender + (1+Trial|Subject),data, REML = FALSE),9)
+
+#test
+all_data2 = as.data.frame(rbind(mean_model2,sd_model2,min_model2, max_model2, median_model2,iqr_model2,mad_model2,coef_model2,range_model2))
+
+newdata2 <- subset(all_data2, `Pr(>|t|)`<0.05, select=c(n, `Pr(>|t|)`,coef, Estimate, `t value`))
+
+```
+
+
+```{r, +interaction}
+#mean
+mean_model3 <- model_info(lmerTest::lmer(mean ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),1)
+#sd
+sd_model3 <- model_info(lmerTest::lmer(SD ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),2)
+#min
+min_model3 <- model_info(lmerTest::lmer(min ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),3) 
+#max
+max_model3 <- model_info(lmerTest::lmer(max ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),4)
+#median
+median_model3 <- model_info(lmerTest::lmer(median ~ Diagnosis*Study + Gender +(1+Trial|Subject),data, REML = FALSE),5)
+#iqr
+iqr_model3 <- model_info(lmerTest::lmer(IQR ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),6)
+#mad
+mad_model3 <- model_info(lmerTest::lmer(mad ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),7)
+#coefvar
+coef_model3 <- model_info(lmerTest::lmer(coef_var ~ Diagnosis*Study + Gender + (1+Trial|Subject) ,data, REML = FALSE),8)
+#range
+range_model3 <- model_info(lmerTest::lmer(range ~ Diagnosis*Study + Gender + (1+Trial|Subject),data, REML = FALSE),9)
+
+all_data3 = as.data.frame(rbind(mean_model3,sd_model3,min_model3, max_model3, median_model3,iqr_model3,mad_model3,coef_model3,range_model3))
+
+newdata3 <- subset(all_data3, `Pr(>|t|)`<0.05, select=c(n, `Pr(>|t|)`,coef, Estimate, `t value`))
+
+```
+
+
+4. Bonus Question: Compare effect size of Diagnosis across the different measures. Which measure seems most sensitive?
+- Tip: to compare across measures you need to put all of them on the same scale, that is, you need to "standardize" them (z-score)
+
+5. Bonus question. In the Clinical Info file you have additional information about the participants. Which additional parameters (e.g. age, gender) should we control for? Report the effects.
+
+6. Write a paragraph reporting methods and results
+
+[Next assignment: can we use these measures to build a tool that diagnoses people from voice only?]
+
+## N.B. Remember to save the acoustic features of voice in a separate file, so to be able to load them next time

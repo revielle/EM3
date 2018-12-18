@@ -1,0 +1,157 @@
+---
+title: "Assignment 5 - Meta-analysis of pitch in schizophrenia"
+author: "Reka Keresztenyi"
+date: "3/7/2017"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pastecs)
+library(metafor)
+library(lme4)
+library(dplyr)
+
+
+data = read.csv("Data.csv", sep=";")
+
+```
+
+# Building on the shoulders of giants: meta-analysis
+
+## Questions to be answered
+
+1. What is the current evidence for distinctive patterns of pitch mean and pitch sd in schizophrenia? Report how many papers report quantitative estimates, your method to analyze them, the estimated effect size of the difference (mean effect size and standard error for pitch mean, same for pitch sd) and forest plots representing it. 
+```{r}
+pitchmean = escalc('SMD', n1i = SampleSizeSchizo, n2i = SampleSizeContros, m1i = PitchMeanSchizo, m2i = PitchMeanControls, sd1i = PitchMeanSchizoSD, sd2i = PitchMeanControlsSD, data = data)
+
+pitchsd = escalc('SMD', n1i = SampleSizeSchizo, n2i = SampleSizeContros, m1i = PitchSDSchizo, m2i = PitchSDControls, sd1i = PitchSDSchizoSD, sd2i = PitchSDControlsSD, data = data)
+
+```
+
+```{r}
+meanmodel = lmer(yi ~ 1 + (1|Article), weights = 1/vi, data = pitchmean, control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
+summary(meanmodel)
+
+sdmodel = lmer(yi ~ 1 + (1|Article), weights = 1/vi, data = pitchsd, control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
+summary(sdmodel)
+```
+
+```{r}
+m1 = rma(yi, vi, data = pitchmean, slab = Article)
+forest(m1)
+summary(m1)
+
+m2 = rma(yi, vi, data = pitchsd, slab = Article)
+forest(m2) 
+summary(m2)
+```
+
+2. Do the results match your own analysis from Assignment 3? If you add your results to the meta-analysis, do the estimated effect sizes change? Report the new estimates and the new forest plots.
+
+```{r}
+data2 = read.csv("schizdata.csv")
+
+SampleSizeSchizo = length(unique(data2$participant[data2$diagnosis == "schizophrenia"]))
+SampleSizeContros = length(unique(data2$participant[data2$diagnosis == "control"]))
+
+PitchMeanControls = mean(data2$mean[data2$diagnosis == "control"])
+PitchMeanSchizo = mean(data2$mean[data2$diagnosis == "schizophrenia"])
+PitchMeanControlsSD = sd(data2$mean[data2$diagnosis == "control"])
+PitchMeanSchizoSD = sd(data2$mean[data2$diagnosis == "schizophrenia"])
+
+PitchSDControls = mean(data2$stdDev[data2$diagnosis == "control"])
+PitchSDSchizo = mean(data2$stdDev[data2$diagnosis == "schizophrenia"])
+PitchSDControlsSD = sd(data2$stdDev[data2$diagnosis == "control"])
+PitchSDSchizoSD = sd(data2$stdDev[data2$diagnosis == "schizophrenia"])
+Article = "Assignment3"
+Year = 2017
+
+x = data.frame(Article, Year, SampleSizeSchizo, SampleSizeContros, PitchMeanControls, PitchMeanControlsSD, PitchMeanSchizo, PitchMeanSchizoSD, PitchSDControls, PitchSDControlsSD, PitchSDSchizo, PitchSDSchizoSD)
+
+data3 = rbind(data, x)
+```
+
+```{r}
+pitchmean1 = escalc('SMD', n1i = SampleSizeSchizo, n2i = SampleSizeContros, m1i = PitchMeanSchizo, m2i = PitchMeanControls, sd1i = PitchMeanSchizoSD, sd2i = PitchMeanControlsSD, data = data3)
+
+pitchsd1 = escalc('SMD', n1i = SampleSizeSchizo, n2i = SampleSizeContros, m1i = PitchSDSchizo, m2i = PitchSDControls, sd1i = PitchSDSchizoSD, sd2i = PitchSDControlsSD, data = data3)
+
+```
+
+```{r}
+meanmodel1 <- lmer(yi ~ 1 + (1|Article), weights = 1/vi, data = pitchmean1, control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
+summary(meanmodel1)
+
+sdmodel1 <- lmer(yi ~ 1 + (1|Article), weights = 1/vi, data = pitchsd1, control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
+summary(sdmodel1)
+```
+
+```{r}
+m1_1 = rma(yi, vi, data = pitchmean1, slab = Article)
+forest(m1_1)
+summary(m1_1)
+
+m2_1 = rma(yi, vi, data = pitchsd1, slab = Article)
+forest(m2_1) 
+summary(m2_1)
+```
+
+
+3. Assess the quality of the literature: report and comment on heterogeneity of the studies (tau, I2), on publication bias (funnel plot), and on influential studies.
+
+```{r}
+summary(m1_1)
+confint(m1_1, 0.95)
+
+# Funnel without ass 3 data
+funnel(m1, main = "Random-Effects Model", xlab = "Standardized Mean Difference")
+regtest(m1) 
+ranktest(m1)
+
+# Funnel including ass 3 data
+funnel(m1_1, main = "Random-Effects Model", xlab = "Standardized Mean Difference")
+regtest(m1_1) 
+ranktest(m1_1)
+
+inf <- influence(m1_1) 
+print(inf) 
+plot(inf)
+
+# -------- SD ---------
+
+summary(m2_1)
+confint(m2_1, 0.95)
+
+# Funnel without ass 3 data
+funnel(m2, main = "Random-Effects Model", xlab = "Standardized Mean Difference")
+regtest(m2) 
+ranktest(m2)
+
+# Funnel including ass 3 data
+funnel(m2_1, main = "Random-Effects Model", xlab = "Standardized Mean Difference")
+regtest(m2_1) 
+ranktest(m2_1)
+
+inf <- influence(m2_1) 
+print(inf) 
+plot(inf)
+```
+
+## Tips on the process to follow:
+
+- Download the data on all published articles analyzing pitch in schizophrenia (on gitlab)
+- Look through the dataset to find out which columns to use, and if there is any additional information written as comments (real world data is always messy!).
+    * Hint: Make sure you read the comments in the columns: `pitch_f0_variability`, `frequency`, `Title`,  `ACOUST_ANA_DESCR`, `DESCRIPTION`, and `COMMENTS`
+- Following the procedure in the slides calculate effect size and standard error of the effect size per each study. N.B. we focus on pitch mean and pitch standard deviation.
+ . first try using lmer (to connect to what you know of mixed effects models)
+ . then use rma() (to get some juicy additional statistics)
+
+- Build a forest plot of the results (forest(model))
+ 
+- Go back to Assignment 3, add your own study to the data table, and re-run meta-analysis. Do the results change?
+
+- Now look at the output of rma() and check tau and I2

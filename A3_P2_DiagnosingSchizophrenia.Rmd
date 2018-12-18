@@ -1,0 +1,505 @@
+---
+title: "Assignment 3 - Part 2 - Diagnosing Schizophrenia from Voice"
+author: "Reka Keresztenyi"
+date: "October 17, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(crqa); library(tseriesChaos); library(nonlinearTseries); library(SparseM); library(lme4); library(dplyr); library(lmerTest); library(MuMIn); library(caret); library(pROC); library(groupdata2); library(pacman)
+p_load(tidyverse, stringr, Metrics, caret, lme4, simr, lmerTest, stats, FinCal, PerformanceAnalytics, nonlinearTseries, GMCM, pROC, createFolds)
+
+setwd("C:/Users/Reka/Documents/EM3")
+data <- read.csv(file = "schizdata.csv")
+```
+
+## Assignment 3 - Diagnosing schizophrenia from voice
+
+In the previous part of the assignment you generated a bunch of "features", that is, of quantitative descriptors of voice in schizophrenia, focusing on pitch.
+In the course of this assignment we will use them to try to automatically diagnose schizophrenia from voice only, that is, relying on the set of features you produced last time, we will try to produce an automated classifier.
+
+### Question 1: Can you diagnose schizophrenia from pitch range only? If so, how well?
+
+Build a logistic regression to see whether you can diagnose schizophrenia from pitch range only.
+Calculate the different performance measures (accuracy, sensitivity, specificity, PPV, NPV, ROC curve) on a logistic regression using the full dataset. Don't forget the random effects!
+
+```{r, differ., include=FALSE}
+
+# logistic regression model 
+model <- glmer(Diagnosis ~ scale(range)+(1+Trial|Subject) + (1|Study), data, family="binomial")
+summary(model)
+#plot 
+ggplot(data,aes(range,Diagnosis,color=Diagnosis))+geom_point()+theme_classic()
+
+#confusion matrix
+data$PredictionsPerc=GMCM:::inv.logit(predict(model))
+data$Predictions[data$PredictionsPerc>0.5]="1"
+data$Predictions[data$PredictionsPerc<=0.5]="0"
+confusionMatrix(data = data$Predictions, reference = data$Diagnosis, positive = "1")
+
+Accuracy = (326+490)/(326+490+338+185) 
+Sensitivity = 490/(185+490) 
+Specificity = 326/(326+338)
+
+#prediction probabilities
+data$Diagnosis <- as.factor(data$Diagnosis)
+data$Predictions <- as.factor(data$Predictions)
+
+posPredValue(data = data$Predictions, reference = data$Diagnosis, positive = "1") 
+negPredValue(data = data$Predictions, reference = data$Diagnosis, negative = "0")
+
+#roc curve
+RocCurve<- roc(response = data$Diagnosis, predictor = data$PredictionsPerc)
+pROC::auc(RocCurve) 
+pROC::ci (RocCurve)
+plot(RocCurve, legacy.axes = TRUE)  #Area under the curve 0.78
+
+
+#Sensitivity : 0.7378          
+#Specificity : 0.4910          
+#Pos Pred Value : 0.5957          
+#Neg Pred Value : 0.6481          
+#Prevalence : 0.5041          
+#Detection Rate : 0.3719          
+#Detection Prevalence : 0.6243          
+#Balanced Accuracy : 0.6144
+
+```
+Then cross-validate the logistic regression and re-calculate performance on the testing folds. N.B. The cross-validation functions you already have should be tweaked: you need to calculate these new performance measures.
+
+N.B. the predict() function generates log odds (the full scale between minus and plus infinity). Log odds > 0 indicates a choice of 1, below a choice of 0.
+N.B. you need to decide whether calculate performance on each single test fold or save all the prediction for test folds in one datase, so to calculate overall performance.
+N.B. Now you have two levels of structure: subject and Study. Should this impact your cross-validation?
+```{r, range, include=FALSE}
+
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+df = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ scale(range) + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$range_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$range_diag[data$range_pred>0.5]="1"
+  data$range_diag[data$range_pred<=0.5]="0"
+  data$range_diag <- as.factor(data$range_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$range_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$range_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$range_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$range_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$range_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+rangeperf <- colMeans(result_df[-6])
+rangeperf
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5261500       0.6863024       0.3761098       0.5306837       0.6167881 
+      
+### Question 2 - Which single acoustic predictor is the best predictor of Diagnosis?
+```{r, mean, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+meandf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ mean + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$mean_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$mean_diag[data$mean_pred>0.5]="1"
+  data$mean_diag[data$mean_pred<=0.5]="0"
+  data$mean_diag <- as.factor(data$mean_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$mean_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$mean_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$mean_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$mean_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$mean_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+meanperf <- colMeans(result_df[-6])
+meanperf
+
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5133366       0.4401945       0.5864299       0.5120495       0.5102912 
+      
+```{r min, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+mindf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ min + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$min_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$min_diag[data$min_pred>0.5]="1"
+  data$min_diag[data$min_pred<=0.5]="0"
+  data$min_diag <- as.factor(data$min_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$min_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$min_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$min_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$min_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$min_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+minperf <- colMeans(result_df[-6])
+minperf
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5587248       0.4441667       0.6774302       0.5906417       0.5480964 
+      
+```{r max, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+maxdf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ max + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$max_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$max_diag[data$max_pred>0.5]="1"
+  data$max_diag[data$max_pred<=0.5]="0"
+  data$max_diag <- as.factor(data$max_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$max_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$max_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$max_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$max_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$max_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+maxperf <- colMeans(result_df[-6])
+maxperf
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.4481231       0.3292570       0.5752303       0.4453676       0.4544671 
+      
+```{r SD, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+SDdf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ SD + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$SD_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$SD_diag[data$SD_pred>0.5]="1"
+  data$SD_diag[data$SD_pred<=0.5]="0"
+  data$SD_diag <- as.factor(data$SD_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$SD_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$SD_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$SD_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$SD_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$SD_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+SDperf <- colMeans(result_df[-6])
+SDperf
+
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5398828       0.7006921       0.3780721       0.5357678       0.5710936
+      
+```{r median, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+mediandf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ median + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$median_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$median_diag[data$median_pred>0.5]="1"
+  data$median_diag[data$median_pred<=0.5]="0"
+  data$median_diag <- as.factor(data$median_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$median_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$median_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$median_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$median_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$median_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+medianperf <- colMeans(result_df[-6])
+medianperf
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5025313       0.4263902       0.5821694       0.4995479       0.5082746
+      
+```{r IQR, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+IQRdf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ IQR + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$IQR_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$IQR_diag[data$IQR_pred>0.5]="1"
+  data$IQR_diag[data$IQR_pred<=0.5]="0"
+  data$IQR_diag <- as.factor(data$IQR_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$IQR_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$IQR_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$IQR_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$IQR_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$IQR_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+IQRperf <- colMeans(result_df[-6])
+IQRperf
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5693451       0.8252132       0.3103865       0.5491526       0.6334787
+      
+```{r mad, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+maddf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ mad + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$mad_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$mad_diag[data$mad_pred>0.5]="1"
+  data$mad_diag[data$mad_pred<=0.5]="0"
+  data$mad_diag <- as.factor(data$mad_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$mad_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$mad_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$mad_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$mad_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$mad_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+madperf <- colMeans(result_df[-6])
+madperf
+
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5701397       0.7610645       0.3761149       0.5514876       0.6196835 
+      
+```{r covvar, include=FALSE}
+data$Diagnosis<- as.factor(data$Diagnosis)
+folds <- createFolds(unique(data$Subject), 5)
+data$Subject <- as.numeric(as.factor(data$Subject))
+covvardf = rep(NA, nrow(data))
+
+#loop
+for (i in 1:length(folds)){
+  f <- folds[[i]]
+  train = filter(data,!(Subject %in% f))
+  test = filter(data,(Subject %in% f))
+  #model
+  model = glmer(Diagnosis ~ coef_var + (1+Trial|Subject) + (1|Study), train, family="binomial")
+  data$coefvar_pred[data$Subject %in% f] = GMCM:::inv.logit(predict(model, test, allow.new.levels = TRUE)) #Transforms outcomes into probabilities
+  data$coefvar_diag[data$coefvar_pred>0.5]="1"
+  data$coefvar_diag[data$coefvar_pred<=0.5]="0"
+  data$coefvar_diag <- as.factor(data$coefvar_diag)
+  #accuracy
+  accuracyTest <- accuracy(data$coefvar_diag[which(data$Subject %in% f)],  data$Diagnosis[which(data$Subject %in% f)])
+  #sensitivity
+  sensitivityTest <- sensitivity(data$coefvar_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1")
+  #specificity
+  specificityTest <- specificity(data$coefvar_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0") 
+  #ppv
+  ppvTest <- posPredValue(data$coefvar_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], positive = "1") 
+  #npv
+  npvTest <- negPredValue(data$coefvar_diag[which(data$Subject %in% f)], reference = data$Diagnosis[which(data$Subject %in% f)], negative = "0")
+  temp_df <- data_frame(accuracyTest = accuracyTest, sensitivityTest = sensitivityTest, specificityTest = specificityTest, ppvTest = ppvTest, npvTest = npvTest, fold_nr = i)
+  if (i == 1){
+    result_df <- temp_df
+  } else {
+    result_df <- rbind(result_df, temp_df)
+  }
+}
+
+coefvperf <- colMeans(result_df[-6])
+coefvperf
+```
+
+accuracyTest sensitivityTest specificityTest         ppvTest         npvTest 
+      0.5955776       0.8034354       0.3881323       0.5694698       0.6663441 
+      
+```{r, include = FALSE}
+all2 <- rbind(rangeperf, meanperf, minperf, maxperf, SDperf, medianperf, IQRperf, madperf, coefvperf)
+all2
+```
+
+              accuracyTest sensitivityTest specificityTest   ppvTest   npvTest
+rangeperf     0.5261500       0.6863024       0.3761098 0.5306837 0.6167881
+meanperf      0.5133366       0.4401945       0.5864299 0.5120495 0.5102912
+minperf       0.5587248       0.4441667       0.6774302 0.5906417 0.5480964
+maxperf       0.4481231       0.3292570       0.5752303 0.4453676 0.4544671
+SDperf        0.5398828       0.7006921       0.3780721 0.5357678 0.5710936
+medianperf    0.5025313       0.4263902       0.5821694 0.4995479 0.5082746
+IQRperf       0.5693451       0.8252132       0.3103865 0.5491526 0.6334787
+madperf       0.5701397       0.7610645       0.3761149 0.5514876 0.6196835
+coefvperf     0.5955776       0.8034354       0.3881323 0.5694698 0.6663441
+
+### Question 3 - Which combination of acoustic predictors is best for diagnosing schizophrenia?
+
+Now it's time to go wild! Use all (voice-related) variables and interactions you can think of. Compare models and select the best performing model you can find.
+
+Remember:
+- Out-of-sample error crucial to build the best model!
+- After choosing the model, send Malte and Riccardo the code of your model
+
+```{r setup, include=FALSE}
+#models...
+model1 = glmer(Diagnosis ~ coef_var + SD + IQR + range + (1+Trial|Subject) + (1|Study), data, family="binomial")
+model2 = glmer(Diagnosis ~ coef_var * SD + range + (1+Trial|Subject) + (1|Study), data, family="binomial")
+
+anova(model1, model2) #10>6>2>9..    #AIC1754.4 vs.1741.6
+summary(model1)
+summary(model2)
+
+```
+
+### Question 4: Properly report the results
+
+METHODS SECTION: how did you analyse the data? That is, how did you extract the data, designed the models and compared their performance?
+
+RESULTS SECTION: can you diagnose schizophrenia based on voice? which features are used? Comment on the difference between the different performance measures.
+
+### Bonus question 5
+
+You have some additional bonus data involving speech rate, pauses, etc. Include them in your analysis. Do they improve classification?
+
+### Bonus question 6
+
+Logistic regression is only one of many classification algorithms. Try using others and compare performance. Some examples: Discriminant Function, Random Forest, Support Vector Machine, etc. The package caret provides them.
