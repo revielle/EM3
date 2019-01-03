@@ -851,6 +851,19 @@ summary(RR_Resp_type_cond)
 ### Testing effects of conditions
  - make a (probably underpowered) mixed model testing effects of the different conditions on heart rate and respiration coordination
  - N.B: would it make sense to include surrogate pairs? and if so how? what would that tell you?
+```{r}
+final_data= read.csv("all_crqa_data")
+#final_data$trial <- as.numeric(final_data$trial)
+
+#heart rate
+modelHR = lmer(HR_RR ~ condition + (1|study) + (1 + trial|group), final_data)
+summary(modelHR)
+
+#respiration
+modelnResp = lmer(Resp_RR ~ condition + (1|study) + (1 + trial|group), final_data)
+summary(modelResp)
+
+```
 
 ### Effects of respiration coordination on heart rate coordination
  - describe how you would test those.
